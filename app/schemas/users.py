@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.db.models import UserRole
+from app.schemas.common import Pagination, optional_patch_default
 
 
 class UserRead(BaseModel):
@@ -17,7 +18,20 @@ class UserRead(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    full_name: str | None = Field(default=None, min_length=1, max_length=255)
+    full_name: str = Field(
+        default_factory=optional_patch_default,
+        min_length=1,
+        max_length=255,
+    )
+
+
+class UserAdminUpdate(UserUpdate):
+    role: UserRole = Field(default_factory=optional_patch_default)
+    is_active: bool = Field(default_factory=optional_patch_default)
+
+
+class UserPage(Pagination):
+    items: list[UserRead]
 
 
 class ChangePasswordRequest(BaseModel):

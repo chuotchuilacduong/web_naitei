@@ -13,7 +13,7 @@ from app.services.cache import (
     invalidate_project_tasks,
     project_tasks_cache_key,
 )
-from app.services.notifications import send_assignment_email
+from app.services.notifications import create_assignment_notification, send_assignment_email
 from app.services.permissions import WRITE_ROLES, PermissionService
 
 router = APIRouter(tags=["tasks"])
@@ -94,14 +94,15 @@ async def create_task(
             "created_by": current_user.id,
         }
     )
-    await session.commit()
-    await session.refresh(task)
 
     if task.assignee_id is not None:
         assignee = await UserRepository(session).get(task.assignee_id)
         if assignee is not None:
+            await create_assignment_notification(session, assignee, task)
             background_tasks.add_task(send_assignment_email, assignee.email, task.title)
 
+    await session.commit()
+    await session.refresh(task)
     await invalidate_project_tasks(getattr(request.app.state, "redis", None), project_id)
     return TaskRead.model_validate(task)
 
@@ -132,14 +133,15 @@ async def update_task(
 
     old_assignee_id = task.assignee_id
     task = await TaskRepository(session).update(task, data)
-    await session.commit()
-    await session.refresh(task)
 
     if task.assignee_id is not None and task.assignee_id != old_assignee_id:
         assignee = await UserRepository(session).get(task.assignee_id)
         if assignee is not None:
+            await create_assignment_notification(session, assignee, task)
             background_tasks.add_task(send_assignment_email, assignee.email, task.title)
 
+    await session.commit()
+    await session.refresh(task)
     await invalidate_project_tasks(getattr(request.app.state, "redis", None), task.project_id)
     return TaskRead.model_validate(task)
 

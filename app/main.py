@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.responses import COMMON_ERROR_RESPONSES
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
@@ -24,6 +25,7 @@ app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     description="TaskHub task management API",
+    responses=COMMON_ERROR_RESPONSES,
     lifespan=lifespan,
 )
 app.add_middleware(RequestLoggingMiddleware)

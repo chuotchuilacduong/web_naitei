@@ -1,9 +1,9 @@
 # TaskHub API
 
 TaskHub is a FastAPI sample app for task management. It implements users,
-workspaces, workspace members, projects, tasks, labels, comments, JWT auth,
-RBAC, Redis caching, Alembic migrations, and Docker Compose for PostgreSQL 16
-and Redis 7.
+workspaces, workspace members, projects, tasks, labels, comments, notifications,
+JWT auth, RBAC, Redis caching, Alembic migrations, and Docker Compose for
+PostgreSQL 16 and Redis 7.
 
 ## Local setup with Conda
 
@@ -29,6 +29,10 @@ TASKHUB_DATABASE_URL=sqlite+aiosqlite:///./taskhub.db
 TASKHUB_REDIS_ENABLED=false
 ```
 
+The first registered user is created as `ADMIN` by default. Change
+`TASKHUB_FIRST_USER_IS_ADMIN=false` if you want every registered user to start as
+`MEMBER`.
+
 ## Docker
 
 ```powershell
@@ -46,6 +50,8 @@ The app runs `alembic upgrade head` before starting Uvicorn.
 ## Main endpoints
 
 Session 1-2 implementation notes are documented in `docs/session_1_2.md`.
+Business logic and core feature gaps are tracked in
+`docs/business_logic_core_features.md`.
 
 - `POST /api/v1/auth/register`
 - `POST /api/v1/auth/login`
@@ -54,6 +60,8 @@ Session 1-2 implementation notes are documented in `docs/session_1_2.md`.
 - `GET /api/v1/users/me`
 - `PATCH /api/v1/users/me`
 - `POST /api/v1/users/me/change-password`
+- `GET /api/v1/users`
+- `PATCH /api/v1/users/{user_id}`
 - `POST /api/v1/workspaces`
 - `GET /api/v1/workspaces/{workspace_id}`
 - `POST /api/v1/workspaces/{workspace_id}/members`
@@ -65,6 +73,9 @@ Session 1-2 implementation notes are documented in `docs/session_1_2.md`.
 - `DELETE /api/v1/tasks/{task_id}`
 - `POST /api/v1/tasks/{task_id}/labels/{label_id}`
 - `POST /api/v1/tasks/{task_id}/comments`
+- `GET /api/v1/notifications/me`
+- `PATCH /api/v1/notifications/{notification_id}/read`
+- `PATCH /api/v1/notifications/me/read-all`
 
 ## Quality checks
 

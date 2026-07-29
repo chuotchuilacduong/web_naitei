@@ -1,5 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.common import optional_patch_default
+
 
 class LabelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -7,8 +9,15 @@ class LabelCreate(BaseModel):
 
 
 class LabelUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=100)
-    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    name: str = Field(
+        default_factory=optional_patch_default,
+        min_length=1,
+        max_length=100,
+    )
+    color: str = Field(
+        default_factory=optional_patch_default,
+        pattern=r"^#[0-9a-fA-F]{6}$",
+    )
 
 
 class LabelRead(BaseModel):

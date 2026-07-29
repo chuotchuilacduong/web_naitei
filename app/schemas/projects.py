@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.db.models import ProjectStatus
+from app.schemas.common import optional_patch_default
 
 
 class ProjectCreate(BaseModel):
@@ -11,9 +12,13 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=255)
+    name: str = Field(
+        default_factory=optional_patch_default,
+        min_length=1,
+        max_length=255,
+    )
     description: str | None = None
-    status: ProjectStatus | None = None
+    status: ProjectStatus = Field(default_factory=optional_patch_default)
 
 
 class ProjectRead(BaseModel):

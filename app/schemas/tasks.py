@@ -3,7 +3,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.db.models import TaskPriority, TaskStatus
-from app.schemas.common import Pagination
+from app.schemas.common import Pagination, optional_patch_default
 
 
 class TaskCreate(BaseModel):
@@ -16,11 +16,15 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=255)
+    title: str = Field(
+        default_factory=optional_patch_default,
+        min_length=1,
+        max_length=255,
+    )
     description: str | None = None
     assignee_id: int | None = None
-    status: TaskStatus | None = None
-    priority: TaskPriority | None = None
+    status: TaskStatus = Field(default_factory=optional_patch_default)
+    priority: TaskPriority = Field(default_factory=optional_patch_default)
     due_date: date | None = None
 
 

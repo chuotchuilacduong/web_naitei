@@ -25,12 +25,13 @@ class AuthService:
                 status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
             )
 
+        should_make_admin = self.settings.first_user_is_admin and await self.users.count_all() == 0
         user = await self.users.create(
             {
                 "email": payload.email.lower(),
                 "full_name": payload.full_name,
                 "hashed_password": hash_password(payload.password),
-                "role": UserRole.MEMBER,
+                "role": UserRole.ADMIN if should_make_admin else UserRole.MEMBER,
                 "is_active": True,
             }
         )

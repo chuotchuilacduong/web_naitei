@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.db.models import WorkspaceRole
+from app.schemas.common import optional_patch_default
 
 
 class WorkspaceCreate(BaseModel):
@@ -10,7 +11,11 @@ class WorkspaceCreate(BaseModel):
 
 
 class WorkspaceUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=255)
+    name: str = Field(
+        default_factory=optional_patch_default,
+        min_length=1,
+        max_length=255,
+    )
 
 
 class WorkspaceRead(BaseModel):

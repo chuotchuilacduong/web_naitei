@@ -52,6 +52,10 @@ class TaskPriority(StrEnum):
     URGENT = "URGENT"
 
 
+class NotificationType(StrEnum):
+    TASK_ASSIGNED = "TASK_ASSIGNED"
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -100,6 +104,10 @@ class User(TimestampMixin, Base):
         foreign_keys="Task.created_by",
     )
     comments: Mapped[list["Comment"]] = relationship(back_populates="author")
+    notifications: Mapped[list["Notification"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -225,6 +233,7 @@ class Task(TimestampMixin, Base):
     comments: Mapped[list["Comment"]] = relationship(
         back_populates="task", cascade="all, delete-orphan"
     )
+    notifications: Mapped[list["Notification"]] = relationship(back_populates="task")
 
 
 class Label(Base):
@@ -258,3 +267,23 @@ class Comment(TimestampMixin, Base):
 
     task: Mapped[Task] = relationship(back_populates="comments")
     author: Mapped[User] = relationship(back_populates="comments")
+
+
+class Notification(TimestampMixin, Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    type: Mapped[NotificationType] = mapped_column(
+        SAEnum(NotificationType, native_enum=False, length=40),
+        nullable=False,
+    )
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="notifications")
+    task: Mapped[Task | None] = relationship(back_populates="notifications")

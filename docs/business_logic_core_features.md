@@ -33,6 +33,12 @@ Core Features section in `web_req_editable.docx`.
   - local/default mode logs the queued email
   - SMTP mode sends mail when enabled by env vars
 - Added global OpenAPI error response documentation for common error cases.
+- Added focused RBAC regression coverage for admin-only user management,
+  workspace OWNER/EDITOR/VIEWER behavior, outsider denial, and assignee-limited
+  task updates/comments.
+- Added regression coverage for auth token rotation/logout/password changes,
+  Redis task-list cache hit/invalidation, project archive, label detach/delete,
+  comment/task/project/workspace deletion, and member removal.
 
 ## Still Optional
 

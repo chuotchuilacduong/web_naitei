@@ -1,8 +1,39 @@
+import fnmatch
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+
+PASSWORD = "strong-password"
+NEW_PASSWORD = "new-strong-password"
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.get_calls: list[str] = []
+        self.set_calls: list[tuple[str, int]] = []
+        self.delete_calls: list[tuple[str, ...]] = []
+
+    async def get(self, key: str) -> str | None:
+        self.get_calls.append(key)
+        return self.store.get(key)
+
+    async def set(self, key: str, value: str, ex: int) -> None:
+        self.set_calls.append((key, ex))
+        self.store[key] = value
+
+    async def scan_iter(self, match: str) -> AsyncIterator[str]:
+        for key in list(self.store):
+            if fnmatch.fnmatch(key, match):
+                yield key
+
+    async def delete(self, *keys: str) -> None:
+        self.delete_calls.append(keys)
+        for key in keys:
+            self.store.pop(key, None)
 
 
 @pytest.fixture
@@ -17,6 +48,7 @@ async def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterat
     from app.db.session import engine
     from app.main import app
 
+    app.state.redis = None
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
@@ -26,7 +58,64 @@ async def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterat
 
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
+    app.state.redis = None
     await engine.dispose()
+
+
+async def register_user(client: AsyncClient, email: str, full_name: str) -> dict[str, Any]:
+    response = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "full_name": full_name,
+            "password": PASSWORD,
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+async def login_headers(client: AsyncClient, email: str) -> dict[str, str]:
+    token_pair = await login_user(client, email)
+    return {"Authorization": f"Bearer {token_pair['access_token']}"}
+
+
+async def login_user(
+    client: AsyncClient,
+    email: str,
+    password: str = PASSWORD,
+) -> dict[str, Any]:
+    response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": password},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+async def create_workspace_and_project(
+    client: AsyncClient,
+    headers: dict[str, str],
+    *,
+    workspace_name: str = "Engineering",
+    project_name: str = "API",
+) -> tuple[int, int]:
+    workspace_response = await client.post(
+        "/api/v1/workspaces",
+        json={"name": workspace_name},
+        headers=headers,
+    )
+    assert workspace_response.status_code == 201
+    workspace_id = workspace_response.json()["id"]
+
+    project_response = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects",
+        json={"name": project_name},
+        headers=headers,
+    )
+    assert project_response.status_code == 201
+    project_id = project_response.json()["id"]
+    return workspace_id, project_id
 
 
 @pytest.mark.asyncio
@@ -192,3 +281,384 @@ async def test_taskhub_core_flow(client: AsyncClient) -> None:
     )
     assert update_response.status_code == 200
     assert update_response.json()["status"] == "DONE"
+
+
+@pytest.mark.asyncio
+async def test_workspace_rbac_roles_and_assignee_permissions(client: AsyncClient) -> None:
+    admin = await register_user(client, "admin@example.com", "Admin User")
+    owner = await register_user(client, "owner-rbac@example.com", "Workspace Owner")
+    editor = await register_user(client, "editor@example.com", "Editor User")
+    viewer = await register_user(client, "viewer@example.com", "Viewer User")
+    outsider = await register_user(client, "outsider@example.com", "Outsider User")
+    assert admin["role"] == "ADMIN"
+    assert owner["role"] == "MEMBER"
+
+    admin_headers = await login_headers(client, "admin@example.com")
+    owner_headers = await login_headers(client, "owner-rbac@example.com")
+    editor_headers = await login_headers(client, "editor@example.com")
+    viewer_headers = await login_headers(client, "viewer@example.com")
+    outsider_headers = await login_headers(client, "outsider@example.com")
+
+    workspace_response = await client.post(
+        "/api/v1/workspaces",
+        json={"name": "RBAC Workspace"},
+        headers=owner_headers,
+    )
+    assert workspace_response.status_code == 201
+    workspace_id = workspace_response.json()["id"]
+
+    project_response = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/projects",
+        json={"name": "RBAC Project"},
+        headers=owner_headers,
+    )
+    assert project_response.status_code == 201
+    project_id = project_response.json()["id"]
+
+    for user, role in ((editor, "EDITOR"), (viewer, "VIEWER")):
+        invite_response = await client.post(
+            f"/api/v1/workspaces/{workspace_id}/members",
+            json={"user_id": user["id"], "role": role},
+            headers=owner_headers,
+        )
+        assert invite_response.status_code == 201
+
+    editor_invite_response = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/members",
+        json={"user_id": outsider["id"], "role": "VIEWER"},
+        headers=editor_headers,
+    )
+    assert editor_invite_response.status_code == 403
+
+    admin_users_response = await client.get("/api/v1/users", headers=admin_headers)
+    assert admin_users_response.status_code == 200
+    editor_users_response = await client.get("/api/v1/users", headers=editor_headers)
+    assert editor_users_response.status_code == 403
+
+    task_response = await client.post(
+        f"/api/v1/projects/{project_id}/tasks",
+        json={"title": "Assigned viewer task", "assignee_id": viewer["id"]},
+        headers=owner_headers,
+    )
+    assert task_response.status_code == 201
+    task_id = task_response.json()["id"]
+
+    viewer_read_response = await client.get(
+        f"/api/v1/projects/{project_id}/tasks",
+        headers=viewer_headers,
+    )
+    assert viewer_read_response.status_code == 200
+    outsider_read_response = await client.get(
+        f"/api/v1/projects/{project_id}/tasks",
+        headers=outsider_headers,
+    )
+    assert outsider_read_response.status_code == 403
+
+    viewer_create_task_response = await client.post(
+        f"/api/v1/projects/{project_id}/tasks",
+        json={"title": "Viewer should not create"},
+        headers=viewer_headers,
+    )
+    assert viewer_create_task_response.status_code == 403
+
+    viewer_status_response = await client.patch(
+        f"/api/v1/tasks/{task_id}",
+        json={"status": "IN_PROGRESS"},
+        headers=viewer_headers,
+    )
+    assert viewer_status_response.status_code == 200
+    assert viewer_status_response.json()["status"] == "IN_PROGRESS"
+
+    viewer_title_response = await client.patch(
+        f"/api/v1/tasks/{task_id}",
+        json={"title": "Viewer should not retitle"},
+        headers=viewer_headers,
+    )
+    assert viewer_title_response.status_code == 403
+
+    viewer_comment_response = await client.post(
+        f"/api/v1/tasks/{task_id}/comments",
+        json={"content": "Assignee can comment"},
+        headers=viewer_headers,
+    )
+    assert viewer_comment_response.status_code == 201
+
+    label_create_response = await client.post(
+        f"/api/v1/projects/{project_id}/labels",
+        json={"name": "backend", "color": "#3366ff"},
+        headers=editor_headers,
+    )
+    assert label_create_response.status_code == 201
+    label_id = label_create_response.json()["id"]
+
+    viewer_attach_label_response = await client.post(
+        f"/api/v1/tasks/{task_id}/labels/{label_id}",
+        headers=viewer_headers,
+    )
+    assert viewer_attach_label_response.status_code == 403
+
+    editor_attach_label_response = await client.post(
+        f"/api/v1/tasks/{task_id}/labels/{label_id}",
+        headers=editor_headers,
+    )
+    assert editor_attach_label_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_refresh_logout_and_change_password_flow(client: AsyncClient) -> None:
+    await register_user(client, "auth@example.com", "Auth User")
+    token_pair = await login_user(client, "auth@example.com")
+
+    profile_response = await client.get(
+        "/api/v1/users/me",
+        headers={"Authorization": f"Bearer {token_pair['access_token']}"},
+    )
+    assert profile_response.status_code == 200
+    assert profile_response.json()["email"] == "auth@example.com"
+
+    refresh_response = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": token_pair["refresh_token"]},
+    )
+    assert refresh_response.status_code == 200
+    refreshed_token_pair = refresh_response.json()
+
+    reused_refresh_response = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": token_pair["refresh_token"]},
+    )
+    assert reused_refresh_response.status_code == 401
+
+    change_password_response = await client.post(
+        "/api/v1/users/me/change-password",
+        json={"current_password": PASSWORD, "new_password": NEW_PASSWORD},
+        headers={"Authorization": f"Bearer {refreshed_token_pair['access_token']}"},
+    )
+    assert change_password_response.status_code == 204
+
+    old_password_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "auth@example.com", "password": PASSWORD},
+    )
+    assert old_password_response.status_code == 401
+
+    new_token_pair = await login_user(client, "auth@example.com", NEW_PASSWORD)
+    logout_response = await client.post(
+        "/api/v1/auth/logout",
+        json={"refresh_token": new_token_pair["refresh_token"]},
+    )
+    assert logout_response.status_code == 204
+
+    logged_out_refresh_response = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": new_token_pair["refresh_token"]},
+    )
+    assert logged_out_refresh_response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_task_list_cache_hit_and_invalidation_flow(client: AsyncClient) -> None:
+    from app.main import app
+
+    await register_user(client, "cache-owner@example.com", "Cache Owner")
+    headers = await login_headers(client, "cache-owner@example.com")
+    _, project_id = await create_workspace_and_project(
+        client,
+        headers,
+        workspace_name="Cache Workspace",
+        project_name="Cache Project",
+    )
+
+    initial_task_response = await client.post(
+        f"/api/v1/projects/{project_id}/tasks",
+        json={"title": "Cached task"},
+        headers=headers,
+    )
+    assert initial_task_response.status_code == 201
+
+    fake_redis = FakeRedis()
+    app.state.redis = fake_redis
+
+    first_list_response = await client.get(
+        f"/api/v1/projects/{project_id}/tasks?limit=10",
+        headers=headers,
+    )
+    assert first_list_response.status_code == 200
+    assert first_list_response.json()["total"] == 1
+    assert len(fake_redis.store) == 1
+    assert len(fake_redis.set_calls) == 1
+    cached_key = next(iter(fake_redis.store))
+
+    second_list_response = await client.get(
+        f"/api/v1/projects/{project_id}/tasks?limit=10",
+        headers=headers,
+    )
+    assert second_list_response.status_code == 200
+    assert second_list_response.json() == first_list_response.json()
+    assert fake_redis.get_calls == [cached_key, cached_key]
+    assert len(fake_redis.set_calls) == 1
+
+    mutation_response = await client.post(
+        f"/api/v1/projects/{project_id}/tasks",
+        json={"title": "Invalidates cached page"},
+        headers=headers,
+    )
+    assert mutation_response.status_code == 201
+    assert fake_redis.store == {}
+    assert any(cached_key in keys for keys in fake_redis.delete_calls)
+
+    refreshed_list_response = await client.get(
+        f"/api/v1/projects/{project_id}/tasks?limit=10",
+        headers=headers,
+    )
+    assert refreshed_list_response.status_code == 200
+    assert refreshed_list_response.json()["total"] == 2
+    assert len(fake_redis.set_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_archive_delete_detach_and_remove_member_flow(client: AsyncClient) -> None:
+    owner = await register_user(client, "delete-owner@example.com", "Delete Owner")
+    member = await register_user(client, "delete-member@example.com", "Delete Member")
+    assert owner["role"] == "ADMIN"
+
+    owner_headers = await login_headers(client, "delete-owner@example.com")
+    member_headers = await login_headers(client, "delete-member@example.com")
+    workspace_id, project_id = await create_workspace_and_project(
+        client,
+        owner_headers,
+        workspace_name="Delete Workspace",
+        project_name="Delete Project",
+    )
+
+    invite_response = await client.post(
+        f"/api/v1/workspaces/{workspace_id}/members",
+        json={"user_id": member["id"], "role": "VIEWER"},
+        headers=owner_headers,
+    )
+    assert invite_response.status_code == 201
+
+    archive_response = await client.post(
+        f"/api/v1/projects/{project_id}/archive",
+        headers=owner_headers,
+    )
+    assert archive_response.status_code == 200
+    assert archive_response.json()["status"] == "ARCHIVED"
+
+    get_archived_project_response = await client.get(
+        f"/api/v1/projects/{project_id}",
+        headers=owner_headers,
+    )
+    assert get_archived_project_response.status_code == 200
+    assert get_archived_project_response.json()["status"] == "ARCHIVED"
+
+    task_response = await client.post(
+        f"/api/v1/projects/{project_id}/tasks",
+        json={"title": "Delete target"},
+        headers=owner_headers,
+    )
+    assert task_response.status_code == 201
+    task_id = task_response.json()["id"]
+
+    label_response = await client.post(
+        f"/api/v1/projects/{project_id}/labels",
+        json={"name": "cleanup", "color": "#33aa66"},
+        headers=owner_headers,
+    )
+    assert label_response.status_code == 201
+    label_id = label_response.json()["id"]
+
+    attach_response = await client.post(
+        f"/api/v1/tasks/{task_id}/labels/{label_id}",
+        headers=owner_headers,
+    )
+    assert attach_response.status_code == 200
+
+    comment_response = await client.post(
+        f"/api/v1/tasks/{task_id}/comments",
+        json={"content": "Delete me"},
+        headers=owner_headers,
+    )
+    assert comment_response.status_code == 201
+    comment_id = comment_response.json()["id"]
+
+    detach_label_response = await client.delete(
+        f"/api/v1/tasks/{task_id}/labels/{label_id}",
+        headers=owner_headers,
+    )
+    assert detach_label_response.status_code == 204
+
+    delete_label_response = await client.delete(
+        f"/api/v1/labels/{label_id}",
+        headers=owner_headers,
+    )
+    assert delete_label_response.status_code == 204
+
+    update_deleted_label_response = await client.patch(
+        f"/api/v1/labels/{label_id}",
+        json={"name": "should be gone"},
+        headers=owner_headers,
+    )
+    assert update_deleted_label_response.status_code == 404
+
+    delete_comment_response = await client.delete(
+        f"/api/v1/comments/{comment_id}",
+        headers=owner_headers,
+    )
+    assert delete_comment_response.status_code == 204
+
+    comments_response = await client.get(
+        f"/api/v1/tasks/{task_id}/comments",
+        headers=owner_headers,
+    )
+    assert comments_response.status_code == 200
+    assert comments_response.json() == []
+
+    delete_task_response = await client.delete(
+        f"/api/v1/tasks/{task_id}",
+        headers=owner_headers,
+    )
+    assert delete_task_response.status_code == 204
+
+    update_deleted_task_response = await client.patch(
+        f"/api/v1/tasks/{task_id}",
+        json={"status": "DONE"},
+        headers=owner_headers,
+    )
+    assert update_deleted_task_response.status_code == 404
+
+    remove_member_response = await client.delete(
+        f"/api/v1/workspaces/{workspace_id}/members/{member['id']}",
+        headers=owner_headers,
+    )
+    assert remove_member_response.status_code == 204
+
+    removed_member_workspace_response = await client.get(
+        f"/api/v1/workspaces/{workspace_id}",
+        headers=member_headers,
+    )
+    assert removed_member_workspace_response.status_code == 403
+
+    delete_project_response = await client.delete(
+        f"/api/v1/projects/{project_id}",
+        headers=owner_headers,
+    )
+    assert delete_project_response.status_code == 204
+
+    get_deleted_project_response = await client.get(
+        f"/api/v1/projects/{project_id}",
+        headers=owner_headers,
+    )
+    assert get_deleted_project_response.status_code == 404
+
+    delete_workspace_response = await client.delete(
+        f"/api/v1/workspaces/{workspace_id}",
+        headers=owner_headers,
+    )
+    assert delete_workspace_response.status_code == 204
+
+    get_deleted_workspace_response = await client.get(
+        f"/api/v1/workspaces/{workspace_id}",
+        headers=owner_headers,
+    )
+    assert get_deleted_workspace_response.status_code == 404

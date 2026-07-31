@@ -7,12 +7,29 @@ services:
       TASKHUB_DATABASE_URL: postgresql+asyncpg://taskhub:taskhub@db:5432/taskhub
       TASKHUB_REDIS_URL: redis://redis:6379/0
       TASKHUB_REDIS_ENABLED: "true"
+      TASKHUB_QUEUE_ENABLED: "true"
+      TASKHUB_QUEUE_NAME: taskhub:queue
       TASKHUB_SECRET_KEY: change-me-use-a-long-random-value-in-production
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: arq app.worker.WorkerSettings
+    environment:
+      TASKHUB_ENVIRONMENT: local
+      TASKHUB_DATABASE_URL: postgresql+asyncpg://taskhub:taskhub@db:5432/taskhub
+      TASKHUB_REDIS_URL: redis://redis:6379/0
+      TASKHUB_REDIS_ENABLED: "true"
+      TASKHUB_QUEUE_ENABLED: "true"
+      TASKHUB_QUEUE_NAME: taskhub:queue
+      TASKHUB_SECRET_KEY: change-me-use-a-long-random-value-in-production
+    depends_on:
       redis:
         condition: service_healthy
 

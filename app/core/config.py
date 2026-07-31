@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     redis_enabled: bool = True
     cache_ttl_seconds: int = Field(default=60, ge=1)
+    queue_enabled: bool = False
+    queue_name: str = "taskhub:queue"
+    queue_job_timeout_seconds: int = Field(default=30, ge=1)
 
     secret_key: str = "change-me-use-a-long-random-value-in-production"
     jwt_algorithm: str = "HS256"
@@ -35,6 +38,9 @@ class Settings(BaseSettings):
     smtp_username: str | None = None
     smtp_password: str | None = None
     smtp_from_email: str = "noreply@taskhub.local"
+    smtp_starttls: bool = True
+    email_max_attempts: int = Field(default=3, ge=1)
+    email_retry_delay_seconds: float = Field(default=5.0, ge=0)
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":

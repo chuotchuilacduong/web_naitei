@@ -39,9 +39,17 @@ Core Features section in `web_req_editable.docx`.
 - Added regression coverage for auth token rotation/logout/password changes,
   Redis task-list cache hit/invalidation, project archive, label detach/delete,
   comment/task/project/workspace deletion, and member removal.
+- Added optional ARQ/Redis queue worker support for assignment email jobs, with
+  FastAPI background task fallback when queueing is disabled or Redis is
+  unavailable.
+- Added text/html assignment email templates plus configurable retry policy.
+- Added broader role matrix regression coverage across admin-only,
+  owner-only, workspace read, workspace write, assignee-specific, and delete
+  behaviors.
 
-## Still Optional
+## Future Hardening
 
-- Real queue worker integration such as Celery/RQ/Arq.
-- Exhaustive RBAC tests for every endpoint and role permutation.
-- Production email provider templates and retry policy.
+- Run `docker compose up --build` in an environment with Docker CLI available.
+- Add provider-specific transactional email templates if adopting a vendor such
+  as SES, SendGrid, or Mailgun.
+- Add observability around queue depth, failed jobs, and email delivery metrics.

@@ -42,6 +42,7 @@ docker compose up --build
 Compose starts:
 
 - `app`: FastAPI app on port 8000
+- `worker`: ARQ worker that processes queued background jobs
 - `db`: PostgreSQL 16 on port 5432
 - `redis`: Redis 7 on port 6379
 
@@ -55,6 +56,7 @@ curl http://127.0.0.1:8000/openapi.json
 ```
 
 Use `docker compose logs -f app` if the API container exits during startup.
+Use `docker compose logs -f worker` to inspect background job processing.
 
 ## Configuration
 
@@ -69,6 +71,9 @@ for local runs.
 | `TASKHUB_REDIS_URL` | `redis://localhost:6379/0` | Redis URL for task-list caching. |
 | `TASKHUB_REDIS_ENABLED` | `true` | Enables Redis cache; set `false` for SQLite-only checks. |
 | `TASKHUB_CACHE_TTL_SECONDS` | `60` | TTL for cached task-list pages. |
+| `TASKHUB_QUEUE_ENABLED` | `false` | Enqueues assignment emails through Redis/ARQ when enabled. |
+| `TASKHUB_QUEUE_NAME` | `taskhub:queue` | ARQ queue name used by the API and worker. |
+| `TASKHUB_QUEUE_JOB_TIMEOUT_SECONDS` | `30` | Maximum runtime for queued jobs. |
 | `TASKHUB_SECRET_KEY` | development placeholder | JWT signing key; must be changed in production. |
 | `TASKHUB_ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | JWT access-token lifetime. |
 | `TASKHUB_REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh-token lifetime. |
@@ -79,6 +84,9 @@ for local runs.
 | `TASKHUB_SMTP_USERNAME` | empty | Optional SMTP username. |
 | `TASKHUB_SMTP_PASSWORD` | empty | Optional SMTP password. |
 | `TASKHUB_SMTP_FROM_EMAIL` | `noreply@taskhub.local` | Sender address for assignment emails. |
+| `TASKHUB_SMTP_STARTTLS` | `true` | Enables STARTTLS for SMTP delivery. |
+| `TASKHUB_EMAIL_MAX_ATTEMPTS` | `3` | Maximum attempts for assignment email delivery. |
+| `TASKHUB_EMAIL_RETRY_DELAY_SECONDS` | `5` | Linear retry delay multiplier for email attempts. |
 
 In `production`, startup fails fast if `TASKHUB_SECRET_KEY` still uses the
 development placeholder.
@@ -157,6 +165,14 @@ reads/writes and still serves task lists from the database.
 ## Background Notifications
 
 Task assignment creates a persistent in-app notification for the assignee. The
-same event queues a FastAPI background task for email notification. By default
-email delivery is disabled and the event is logged; set `TASKHUB_EMAIL_ENABLED`
-and the SMTP variables above to send email.
+same event can enqueue an ARQ job for email notification when
+`TASKHUB_QUEUE_ENABLED=true`. If queueing is disabled or Redis is unavailable,
+the API falls back to a FastAPI background task. By default email delivery is
+disabled and the event is logged; set `TASKHUB_EMAIL_ENABLED` and the SMTP
+variables above to send text/html assignment emails with retry handling.
+
+Run a worker locally with:
+
+```powershell
+arq app.worker.WorkerSettings
+```

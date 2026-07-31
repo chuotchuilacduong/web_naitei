@@ -13,10 +13,24 @@ from app.services.cache import (
     invalidate_project_tasks,
     project_tasks_cache_key,
 )
-from app.services.notifications import create_assignment_notification, send_assignment_email
+from app.services.notifications import (
+    create_assignment_notification,
+    send_assignment_email_with_retry,
+)
 from app.services.permissions import WRITE_ROLES, PermissionService
+from app.services.queue import enqueue_assignment_email
 
 router = APIRouter(tags=["tasks"])
+
+
+async def schedule_assignment_email(
+    background_tasks: BackgroundTasks,
+    recipient_email: str,
+    task_title: str,
+) -> None:
+    queued = await enqueue_assignment_email(recipient_email, task_title)
+    if not queued:
+        background_tasks.add_task(send_assignment_email_with_retry, recipient_email, task_title)
 
 
 @router.get("/projects/{project_id}/tasks", response_model=TaskPage)
@@ -95,15 +109,18 @@ async def create_task(
         }
     )
 
+    pending_assignment_email: tuple[str, str] | None = None
     if task.assignee_id is not None:
         assignee = await UserRepository(session).get(task.assignee_id)
         if assignee is not None:
             await create_assignment_notification(session, assignee, task)
-            background_tasks.add_task(send_assignment_email, assignee.email, task.title)
+            pending_assignment_email = (assignee.email, task.title)
 
     await session.commit()
     await session.refresh(task)
     await invalidate_project_tasks(getattr(request.app.state, "redis", None), project_id)
+    if pending_assignment_email is not None:
+        await schedule_assignment_email(background_tasks, *pending_assignment_email)
     return TaskRead.model_validate(task)
 
 
@@ -134,15 +151,18 @@ async def update_task(
     old_assignee_id = task.assignee_id
     task = await TaskRepository(session).update(task, data)
 
+    pending_assignment_email: tuple[str, str] | None = None
     if task.assignee_id is not None and task.assignee_id != old_assignee_id:
         assignee = await UserRepository(session).get(task.assignee_id)
         if assignee is not None:
             await create_assignment_notification(session, assignee, task)
-            background_tasks.add_task(send_assignment_email, assignee.email, task.title)
+            pending_assignment_email = (assignee.email, task.title)
 
     await session.commit()
     await session.refresh(task)
     await invalidate_project_tasks(getattr(request.app.state, "redis", None), task.project_id)
+    if pending_assignment_email is not None:
+        await schedule_assignment_email(background_tasks, *pending_assignment_email)
     return TaskRead.model_validate(task)
 
 

@@ -8,6 +8,26 @@ from httpx import ASGITransport, AsyncClient
 
 PASSWORD = "strong-password"
 NEW_PASSWORD = "new-strong-password"
+REQUIRED_OPENAPI_OPERATIONS = {
+    ("post", "/api/v1/auth/register"),
+    ("post", "/api/v1/auth/login"),
+    ("post", "/api/v1/auth/refresh"),
+    ("post", "/api/v1/auth/logout"),
+    ("get", "/api/v1/users/me"),
+    ("patch", "/api/v1/users/me"),
+    ("post", "/api/v1/users/me/change-password"),
+    ("post", "/api/v1/workspaces"),
+    ("get", "/api/v1/workspaces/{workspace_id}"),
+    ("post", "/api/v1/workspaces/{workspace_id}/members"),
+    ("delete", "/api/v1/workspaces/{workspace_id}/members/{user_id}"),
+    ("post", "/api/v1/workspaces/{workspace_id}/projects"),
+    ("get", "/api/v1/projects/{project_id}/tasks"),
+    ("post", "/api/v1/projects/{project_id}/tasks"),
+    ("patch", "/api/v1/tasks/{task_id}"),
+    ("delete", "/api/v1/tasks/{task_id}"),
+    ("post", "/api/v1/tasks/{task_id}/labels/{label_id}"),
+    ("post", "/api/v1/tasks/{task_id}/comments"),
+}
 
 
 class FakeRedis:
@@ -134,6 +154,21 @@ async def create_workspace_and_project(
     assert project_response.status_code == 201
     project_id = project_response.json()["id"]
     return workspace_id, project_id
+
+
+@pytest.mark.asyncio
+async def test_openapi_keeps_required_spec_endpoints_documented(client: AsyncClient) -> None:
+    response = await client.get("/openapi.json")
+    assert response.status_code == 200
+    paths = response.json()["paths"]
+
+    missing_operations = [
+        f"{method.upper()} {path}"
+        for method, path in sorted(REQUIRED_OPENAPI_OPERATIONS)
+        if method not in paths.get(path, {})
+    ]
+
+    assert missing_operations == []
 
 
 @pytest.mark.asyncio
